@@ -716,6 +716,29 @@ local EnemySet = {}
 local EnemyCacheTime = 0
 local ENEMY_CACHE_INTERVAL = 0.15
 
+local BodyPartCache = {}
+
+local function GetBodyParts(character)
+    local cached = BodyPartCache[character]
+    if cached then return cached end
+    local list = {}
+    for _, part in ipairs(character:GetDescendants()) do
+        if IsValidBodyPart(part) then
+            list[#list + 1] = part
+        end
+    end
+    BodyPartCache[character] = list
+    return list
+end
+
+local function InvalidateBodyPartCache(character)
+    if character then
+        BodyPartCache[character] = nil
+    else
+        BodyPartCache = {}
+    end
+end
+
 local function RebuildEnemyCache()
     local now = os.clock()
     if now - EnemyCacheTime < ENEMY_CACHE_INTERVAL then return end
@@ -837,7 +860,13 @@ local function UpdateFOVCircle()
     end
 end
 
-RunService.RenderStepped:Connect(UpdateFOVCircle)
+local LastFOVUpdate = 0
+RunService.RenderStepped:Connect(function()
+    local now = os.clock()
+    if now - LastFOVUpdate < 0.05 then return end
+    LastFOVUpdate = now
+    UpdateFOVCircle()
+end)
 
 local function IsValidBodyPart(part)
     if not part or not part:IsA("BasePart") then return false end
@@ -895,20 +924,18 @@ local function GetSilentAimTarget()
     for _, character in pairs(EnemySet) do
         if character then
             if TargetPart == "Nearest Part" then
-                for _, part in ipairs(character:GetDescendants()) do
-                    if IsValidBodyPart(part) then
-                        local pp = GetPredictedPosition(part)
-                        local screen, visible = cam:WorldToViewportPoint(pp)
-                        if visible and screen.Z > 0 then
-                            local dx = screen.X - adjustedAim.X
-                            local dy = screen.Y - adjustedAim.Y
-                            local sd = math.sqrt(dx * dx + dy * dy)
-                            local wd = (pp - cam.CFrame.Position).Magnitude
-                            local better = DistancePriority == "Closest" and sd < bestDistance or wd > bestDistance
-                            if better and IsVisible(part) then
-                                bestDistance = DistancePriority == "Closest" and sd or wd
-                                bestPart = part
-                            end
+                for _, part in ipairs(GetBodyParts(character)) do
+                    local pp = GetPredictedPosition(part)
+                    local screen, visible = cam:WorldToViewportPoint(pp)
+                    if visible and screen.Z > 0 then
+                        local dx = screen.X - adjustedAim.X
+                        local dy = screen.Y - adjustedAim.Y
+                        local sd = math.sqrt(dx * dx + dy * dy)
+                        local wd = (pp - cam.CFrame.Position).Magnitude
+                        local better = DistancePriority == "Closest" and sd < bestDistance or wd > bestDistance
+                        if better and IsVisible(part) then
+                            bestDistance = DistancePriority == "Closest" and sd or wd
+                            bestPart = part
                         end
                     end
                 end
@@ -946,17 +973,15 @@ local function GetTriggerTarget()
     local bestDistance = TriggerFOV
     for _, character in pairs(EnemySet) do
         if character then
-            for _, part in ipairs(character:GetDescendants()) do
-                if IsValidBodyPart(part) then
-                    local screen, visible = cam:WorldToViewportPoint(part.Position)
-                    if visible and screen.Z > 0 then
-                        local dx = screen.X - aimPoint.X
-                        local dy = screen.Y - aimPoint.Y
-                        local d = math.sqrt(dx * dx + dy * dy)
-                        if d < bestDistance and IsVisible(part) then
-                            bestDistance = d
-                            bestPart = part
-                        end
+            for _, part in ipairs(GetBodyParts(character)) do
+                local screen, visible = cam:WorldToViewportPoint(part.Position)
+                if visible and screen.Z > 0 then
+                    local dx = screen.X - aimPoint.X
+                    local dy = screen.Y - aimPoint.Y
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d < bestDistance and IsVisible(part) then
+                        bestDistance = d
+                        bestPart = part
                     end
                 end
             end
@@ -1264,34 +1289,9 @@ RefreshGun = function()
 end
 
 local function FindGunCooldownUpvalue(shootFn)
-    GunCooldownUpvalueIndex = nil
     GunCooldownUpvalueFunc  = nil
+    GunCooldownUpvalueIndex = nil
     GunCooldownDuration     = 0.15
-    if type(getgc) ~= "function" then return end
-    local ok, gc = pcall(getgc)
-    if not ok or type(gc) ~= "table" then return end
-    for _, fn in ipairs(gc) do
-        if type(fn) ~= "function" then continue end
-        local okUps, ups = pcall(getupvalues, fn)
-        if not okUps or type(ups) ~= "table" then continue end
-        local hasShootFn = false
-        local boolIdx = nil
-        for i, v in pairs(ups) do
-            if v == shootFn then hasShootFn = true end
-            if type(v) == "boolean" and boolIdx == nil then boolIdx = i end
-        end
-        if hasShootFn and boolIdx then
-            GunCooldownUpvalueFunc  = fn
-            GunCooldownUpvalueIndex = boolIdx
-            for _, v in pairs(ups) do
-                if type(v) == "number" and v >= 0.5 and v <= 10 then
-                    GunCooldownDuration = v
-                    break
-                end
-            end
-            break
-        end
-    end
 end
 
 local function IsGunInternalCooldownActive()
@@ -1349,10 +1349,6 @@ local function Shoot(overrideTarget, isInstant)
         aimPosition = ray.Origin + ray.Direction * 5000
     end
 
-    if GunCooldownUpvalueFunc == nil and GunCooldownUpvalueIndex == nil then
-        FindGunCooldownUpvalue(shootFunction)
-    end
-
     Cooldown = true
     LastShootTime = os.clock()
 
@@ -1386,7 +1382,7 @@ RunService.Heartbeat:Connect(function()
     if not IsRoundActive() then TargetAcquiredTime = 0; return end
 
     local now = os.clock()
-    if now - LastTriggerTick < 0.016 then return end
+    if now - LastTriggerTick < 0.033 then return end
     LastTriggerTick = now
 
     local triggerTarget = GetTriggerTarget()
@@ -1499,11 +1495,15 @@ local function SetupPlayer(player)
     if player == LP then return end
     DisconnectPlayerConnections(player)
     local conns = {}
-    conns.CharacterAdded = player.CharacterAdded:Connect(function()
-        task.wait(0.2); CreateESP(player); InvalidateEnemyCache()
+    conns.CharacterAdded = player.CharacterAdded:Connect(function(char)
+        task.wait(0.2)
+        CreateESP(player)
+        InvalidateEnemyCache()
+        InvalidateBodyPartCache(char)
     end)
     conns.CharacterRemoving = player.CharacterRemoving:Connect(function()
-        DestroyESP(player); InvalidateEnemyCache()
+        DestroyESP(player)
+        InvalidateEnemyCache()
     end)
     conns.Team = player:GetPropertyChangedSignal("Team"):Connect(function()
         task.defer(function() CreateESP(player); InvalidateEnemyCache() end)
@@ -2250,6 +2250,7 @@ local function ConnectCharacter(character)
     if CurrentGunScript then EnableGunScript() end
     FullCacheWipe()
     Firing = false
+    InvalidateBodyPartCache(character)
     for _, child in ipairs(character:GetChildren()) do
         if child:IsA("Tool") then HookToolActivation(child) end
     end
@@ -2269,6 +2270,12 @@ local function ConnectCharacter(character)
             if CurrentGunScript then EnableGunScript() end
             ClearGunState()
         end
+    end)
+    character.DescendantAdded:Connect(function()
+        InvalidateBodyPartCache(character)
+    end)
+    character.DescendantRemoving:Connect(function()
+        InvalidateBodyPartCache(character)
     end)
     task.wait(0.3)
     RefreshESP()
@@ -2322,7 +2329,7 @@ end)
 
 task.spawn(function()
     while true do
-        task.wait(0.5)
+        task.wait(1.0)
         if not SilentAim then
             AutoReequipAttempts = 0
             continue
@@ -2386,6 +2393,7 @@ task.spawn(function()
             FullCacheWipe()
             RefreshESP()
             InvalidateEnemyCache()
+            InvalidateBodyPartCache()
             if SilentAim then
                 task.spawn(function()
                     for i = 1, 15 do
