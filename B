@@ -716,29 +716,6 @@ local EnemySet = {}
 local EnemyCacheTime = 0
 local ENEMY_CACHE_INTERVAL = 0.15
 
-local BodyPartCache = {}
-
-local function GetBodyParts(character)
-    local cached = BodyPartCache[character]
-    if cached then return cached end
-    local list = {}
-    for _, part in ipairs(character:GetDescendants()) do
-        if IsValidBodyPart(part) then
-            list[#list + 1] = part
-        end
-    end
-    BodyPartCache[character] = list
-    return list
-end
-
-local function InvalidateBodyPartCache(character)
-    if character then
-        BodyPartCache[character] = nil
-    else
-        BodyPartCache = {}
-    end
-end
-
 local function RebuildEnemyCache()
     local now = os.clock()
     if now - EnemyCacheTime < ENEMY_CACHE_INTERVAL then return end
@@ -882,6 +859,29 @@ local function IsValidBodyPart(part)
         ["Left Arm"] = true, ["Right Arm"] = true, ["Left Leg"] = true, ["Right Leg"] = true
     }
     return valid[part.Name] == true
+end
+
+local BodyPartCache = {}
+
+local function GetBodyParts(character)
+    local cached = BodyPartCache[character]
+    if cached then return cached end
+    local list = {}
+    for _, part in ipairs(character:GetDescendants()) do
+        if IsValidBodyPart(part) then
+            list[#list + 1] = part
+        end
+    end
+    BodyPartCache[character] = list
+    return list
+end
+
+local function InvalidateBodyPartCache(character)
+    if character then
+        BodyPartCache[character] = nil
+    else
+        BodyPartCache = {}
+    end
 end
 
 local function GetFixedTargetPart(character)
