@@ -54,7 +54,7 @@ local VisibleCheck         = false
 local DebugMode            = false
 
 local TriggerbotEnabled    = false
-local TriggerFOV           = 25
+local TriggerFOV           = 45
 local TriggerDelay         = 0.08
 local TriggerInstant       = false
 local TriggerHumanize      = false
@@ -62,7 +62,9 @@ local PreFireDelay         = 0.05
 local LastTriggerTime      = 0
 local TargetAcquiredTime   = 0
 local TriggerFOVCircle     = nil
-local LastTriggerTick      = 0
+
+local PeekFireEnabled      = false
+local PeekFireRange        = 80
 
 local ShowFOV              = false
 local FOVSize              = 150
@@ -969,11 +971,37 @@ local function GetTriggerTarget()
     local cam = workspace.CurrentCamera
     local aimPoint = GetAimPoint()
     if not cam or not aimPoint then return nil end
+    local myChar = LP.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
     local bestPart = nil
     local bestDistance = TriggerFOV
+
     for _, character in pairs(EnemySet) do
         if character then
+            local enemyRoot = character:FindFirstChild("HumanoidRootPart")
+            local enemyVel = enemyRoot and enemyRoot.AssemblyLinearVelocity or Vector3.new()
+            local enemySpeed = Vector3.new(enemyVel.X, 0, enemyVel.Z).Magnitude
+            local movingTowardUs = false
+
+            if myRoot and enemyRoot then
+                local toUs = (myRoot.Position - enemyRoot.Position)
+                if toUs.Magnitude > 0.1 then
+                    toUs = toUs.Unit
+                else
+                    toUs = Vector3.new()
+                end
+                local velDir = Vector3.new(enemyVel.X, 0, enemyVel.Z)
+                if velDir.Magnitude > 0.1 then
+                    velDir = velDir.Unit
+                end
+                if enemySpeed > 1 and velDir:Dot(toUs) > 0.5 then
+                    movingTowardUs = true
+                end
+            end
+
             for _, part in ipairs(GetBodyParts(character)) do
+                local inFOV = false
                 local screen, visible = cam:WorldToViewportPoint(part.Position)
                 if visible and screen.Z > 0 then
                     local dx = screen.X - aimPoint.X
@@ -982,6 +1010,24 @@ local function GetTriggerTarget()
                     if d < bestDistance and IsVisible(part) then
                         bestDistance = d
                         bestPart = part
+                        inFOV = true
+                    end
+                end
+
+                if not inFOV and PeekFireEnabled and myRoot and movingTowardUs then
+                    local toEnemy = (part.Position - myRoot.Position)
+                    local dist = toEnemy.Magnitude
+                    if dist <= PeekFireRange and dist > 0.1 then
+                        local toDir = toEnemy.Unit
+                        local lookDir = cam.CFrame.LookVector
+                        if toDir:Dot(lookDir) > 0.82 then
+                            if part.Name == "Head" or part.Name == "HumanoidRootPart" or part.Name == "UpperTorso" then
+                                if dist < bestDistance then
+                                    bestDistance = dist
+                                    bestPart = part
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -1376,25 +1422,23 @@ local function Shoot(overrideTarget, isInstant)
     task.delay(GunCooldownDuration, function() Cooldown = false end)
 end
 
-RunService.Heartbeat:Connect(function()
+RunService.RenderStepped:Connect(function()
     if not TriggerbotEnabled then TargetAcquiredTime = 0; return end
     if not SilentAim then TargetAcquiredTime = 0; return end
     if not IsRoundActive() then TargetAcquiredTime = 0; return end
 
-    local now = os.clock()
-    if now - LastTriggerTick < 0.033 then return end
-    LastTriggerTick = now
-
     local triggerTarget = GetTriggerTarget()
     if not triggerTarget then TargetAcquiredTime = 0; return end
+
     if not CurrentShootFunction or CurrentGun ~= GetEquippedGun() then
         RefreshGun()
         return
     end
 
     if TriggerInstant then
-        LastTriggerTime = now
-        TargetAcquiredTime = now
+        LastTriggerTime = os.clock()
+        TargetAcquiredTime = os.clock()
+        Cooldown = false
         Shoot(triggerTarget, true)
         return
     end
@@ -1402,19 +1446,19 @@ RunService.Heartbeat:Connect(function()
     if Cooldown then return end
 
     if TargetAcquiredTime == 0 then
-        TargetAcquiredTime = now
+        TargetAcquiredTime = os.clock()
         return
     end
-    local heldFor = now - TargetAcquiredTime
+    local heldFor = os.clock() - TargetAcquiredTime
     if heldFor < PreFireDelay then return end
 
     local effectiveDelay = TriggerDelay
     if TriggerHumanize then
         effectiveDelay = TriggerDelay + (math.random(2, 10) / 100)
     end
-    if now - LastTriggerTime < effectiveDelay then return end
+    if os.clock() - LastTriggerTime < effectiveDelay then return end
 
-    LastTriggerTime = now
+    LastTriggerTime = os.clock()
     Shoot(triggerTarget)
 end)
 
@@ -1530,6 +1574,8 @@ local function GetCurrentState()
         TriggerInstant = TriggerInstant,
         TriggerHumanize = TriggerHumanize,
         PreFireDelay = PreFireDelay,
+        PeekFireEnabled = PeekFireEnabled,
+        PeekFireRange = PeekFireRange,
         PlayerESP = PlayerESPEnabled,
         PlayerNameESP = PlayerNameESPEnabled,
         ESPColorR = ESPFillColor.R,
@@ -1887,6 +1933,7 @@ local function ApplyState(state)
     if typeof(state.TriggerbotEnabled) == "boolean" and UIRefs.Triggerbot then UIRefs.Triggerbot(state.TriggerbotEnabled, true) end
     if typeof(state.TriggerInstant) == "boolean" and UIRefs.TriggerInstant then UIRefs.TriggerInstant(state.TriggerInstant, true) end
     if typeof(state.TriggerHumanize) == "boolean" and UIRefs.TriggerHumanize then UIRefs.TriggerHumanize(state.TriggerHumanize, true) end
+    if typeof(state.PeekFireEnabled) == "boolean" and UIRefs.PeekFire then UIRefs.PeekFire(state.PeekFireEnabled, true) end
     if typeof(state.PlayerESP) == "boolean" and UIRefs.PlayerESP then UIRefs.PlayerESP(state.PlayerESP, true) end
     if typeof(state.PlayerNameESP) == "boolean" and UIRefs.PlayerNameESP then UIRefs.PlayerNameESP(state.PlayerNameESP, true) end
     if typeof(state.CustomTrace) == "boolean" and UIRefs.CustomTrace then UIRefs.CustomTrace(state.CustomTrace, true) end
@@ -1938,6 +1985,9 @@ local function ApplyState(state)
     end
     if typeof(state.TriggerDelay) == "number" and UIRefs.TriggerDelay then
         UIRefs.TriggerDelay(math.floor(state.TriggerDelay * 100 + 0.5), true)
+    end
+    if typeof(state.PeekFireRange) == "number" and UIRefs.PeekRange then
+        UIRefs.PeekRange(state.PeekFireRange, true)
     end
 end
 
@@ -2015,8 +2065,14 @@ UIRefs.TriggerFOV = createStepperRow(combatPage, "Trigger FOV", 5, 3, 60, Trigge
 UIRefs.PreFireDelay = createStepperRow(combatPage, "Pre-Fire Delay", 6, 0, 50, math.floor(PreFireDelay * 100 + 0.5), 1, function(v) PreFireDelay = v / 100 end, function(v) return v .. "ms" end)
 UIRefs.TriggerDelay = createStepperRow(combatPage, "Trigger Delay", 7, 2, 50, math.floor(TriggerDelay * 100 + 0.5), 1, function(v) TriggerDelay = v / 100 end, function(v) return v .. "ms" end)
 
-createSectionHeader(combatPage, "Settings", 8)
-createToggleRow(combatPage, "Debug Mode", 9, DebugMode, function(state) DebugMode = state end)
+createSectionHeader(combatPage, "Anti-Peek", 8)
+UIRefs.PeekFire = createToggleRow(combatPage, "Peek Fire", 9, PeekFireEnabled, function(state)
+    PeekFireEnabled = state
+end)
+UIRefs.PeekRange = createStepperRow(combatPage, "Peek Range (studs)", 10, 20, 200, PeekFireRange, 5, function(v) PeekFireRange = v end)
+
+createSectionHeader(combatPage, "Settings", 11)
+createToggleRow(combatPage, "Debug Mode", 12, DebugMode, function(state) DebugMode = state end)
 
 createSectionHeader(visualsPage, "ESP", 1)
 UIRefs.PlayerESP = createToggleRow(visualsPage, "Player ESP", 2, PlayerESPEnabled, function(state)
@@ -2174,7 +2230,7 @@ local function createNineHubCard(parent, layoutOrder)
     tips.Position = UDim2.new(0, 12, 0, 112)
     tips.BackgroundTransparency = 1
     tips.Font = Enum.Font.GothamMedium
-    tips.Text = "FPS Boost modes:\n- Basic: lowers quality, kills lights/particles\n- Aggressive: also sweeps new effects every 5s\n- Extreme: also removes sky, textures, shadows, water, GUIs"
+    tips.Text = "Anti-peek setup:\n- Enable Silent Aim + Triggerbot\n- Enable Instant Trigger (auto-fires)\n- Enable Peek Fire (only fires at enemies MOVING toward you)\n- Raise Trigger FOV to 60"
     tips.TextColor3 = Color3.fromRGB(190, 190, 200)
     tips.TextSize = 10
     tips.TextXAlignment = Enum.TextXAlignment.Left
@@ -2319,9 +2375,9 @@ task.spawn(function()
             GunScanCache[gun.Name] = nil
             ScanFailTime[gun.Name] = nil
             RefreshGun()
-            local delay = 0.35
-            if FPSMode >= 2 then delay = 1.5 end
-            if AutoReequipAttempts > 0 then delay = 0.75 end
+            local delay = 0.1
+            if FPSMode >= 2 then delay = 0.4 end
+            if AutoReequipAttempts > 0 then delay = 0.4 end
             task.wait(delay)
         end
     end
